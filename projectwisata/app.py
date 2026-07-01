@@ -1,853 +1,685 @@
-"""
-app.py ─ Sistem Rekomendasi Destinasi Wisata Indonesia
-Content-Based Filtering · TF-IDF + Cosine Similarity
-Streamlit · Folium
-"""
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import re
+import html
 import math
+from pathlib import Path
+
+import folium
+import numpy as np
+import pandas as pd
+import streamlit as st
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import MinMaxScaler
-import folium
-from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  KONFIGURASI HALAMAN
-# ══════════════════════════════════════════════════════════════════════════════
+
+# =========================================================
+# KONFIGURASI DASAR
+# =========================================================
+BASE_DIR = Path(__file__).resolve().parent
+
+DATA_PATH_CANDIDATES = [
+    BASE_DIR / "data" / "DATASET_WISATA_READY_MODELING_FINAL.csv",
+    BASE_DIR / "DATASET_WISATA_READY_MODELING_FINAL.csv",
+    BASE_DIR / "DATASET_WISATA_READY_MODELING_FINAL (1).csv",
+]
+
+NO_REFERENCE = "Tanpa wisata referensi"
+ALL_CITY = "Semua Kota"
+ALL_CATEGORY = "Semua Kategori"
+
+REQUIRED_COLUMNS = [
+    "place_id",
+    "nama_wisata",
+    "deskripsi",
+    "kategori",
+    "kota",
+    "harga",
+    "rating",
+    "lat",
+    "long",
+    "gambar",
+    "fitur_gabungan",
+]
+
+CITY_COORDINATES = {
+    "Jakarta": (-6.200000, 106.816666),
+    "Bandung": (-6.917464, 107.619125),
+    "Yogyakarta": (-7.795580, 110.369490),
+    "Semarang": (-6.966667, 110.416664),
+    "Surabaya": (-7.257472, 112.752090),
+    "Bogor": (-6.597147, 106.806039),
+    "Malang": (-7.966620, 112.632629),
+    "Surakarta": (-7.575488, 110.824327),
+}
+
+
 st.set_page_config(
-    page_title="WisataJawa · Temukan Destinasimu",
-    page_icon="🌿",
+    page_title="Sistem Rekomendasi Wisata Indonesia",
+    page_icon="🧭",
     layout="wide",
-    initial_sidebar_state="expanded",
 )
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  DESIGN SYSTEM
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Lora:ital,wght@0,400;0,600;1,400&display=swap');
 
-/* ── Reset & Base ── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; }
-html, body, [data-testid="stAppViewContainer"] {
-    background: #f0f4f0 !important;
-    font-family: 'Plus Jakarta Sans', sans-serif;
-}
-[data-testid="stAppViewContainer"] > .main { background: #f0f4f0 !important; }
-.block-container { padding: 1.5rem 2.5rem 4rem !important; max-width: 1400px !important; }
-h1,h2,h3,h4 { font-family: 'Lora', serif; }
-
-/* ── Sidebar ── */
-[data-testid="stSidebar"] {
-    background: #0f2d1a !important;
-    border-right: none !important;
-}
-[data-testid="stSidebar"] * { color: #d4e8d8 !important; }
-[data-testid="stSidebar"] .stSelectbox label,
-[data-testid="stSidebar"] .stMultiSelect label,
-[data-testid="stSidebar"] .stSlider label,
-[data-testid="stSidebar"] p { color: #a8c9ae !important; font-size: 0.82rem !important; }
-[data-testid="stSidebar"] [data-baseweb="select"] > div,
-[data-testid="stSidebar"] [data-baseweb="input"] > div {
-    background: #1a3d25 !important;
-    border-color: #2d5c3a !important;
-    color: #e8f5eb !important;
-    border-radius: 10px !important;
-}
-[data-testid="stSidebar"] .stButton > button {
-    background: #2d9e5a !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: 12px !important;
-    font-weight: 700 !important;
-    padding: 0.65rem 1rem !important;
-    width: 100% !important;
-    font-size: 0.92rem !important;
-    transition: background .2s !important;
-}
-[data-testid="stSidebar"] .stButton > button:hover {
-    background: #24834a !important;
-}
-
-/* ── Hero Header ── */
-.hero-wrap {
-    background: linear-gradient(135deg, #0f2d1a 0%, #1a5c33 60%, #2d9e5a 100%);
-    border-radius: 24px;
-    padding: 2.8rem 3rem 2.4rem;
-    margin-bottom: 1.6rem;
-    position: relative;
-    overflow: hidden;
-}
-.hero-wrap::before {
-    content: '';
-    position: absolute; inset: 0;
-    background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.04'%3E%3Ccircle cx='30' cy='30' r='28'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") repeat;
-    opacity: .6;
-}
-.hero-title {
-    font-family: 'Lora', serif;
-    font-size: 2.6rem;
-    font-weight: 600;
-    color: #f0faf2;
-    line-height: 1.2;
-    position: relative;
-}
-.hero-title span { color: #7edaa0; font-style: italic; }
-.hero-sub {
-    color: #a8d8b8;
-    font-size: 1rem;
-    margin-top: 0.5rem;
-    font-weight: 400;
-    position: relative;
-}
-.hero-stats {
-    display: flex; gap: 2rem;
-    margin-top: 1.8rem;
-    position: relative;
-}
-.hstat { text-align: left; }
-.hstat-num { font-size: 1.9rem; font-weight: 800; color: #7edaa0; line-height: 1; }
-.hstat-label { font-size: 0.72rem; color: #a8d8b8; text-transform: uppercase; letter-spacing: .08em; margin-top: 2px; }
-
-/* ── Section label ── */
-.sec-label {
-    font-size: 0.7rem; font-weight: 700; letter-spacing: .1em;
-    text-transform: uppercase; color: #2d9e5a;
-    margin-bottom: 6px;
-}
-.sec-title {
-    font-family: 'Lora', serif;
-    font-size: 1.45rem; font-weight: 600;
-    color: #0f2d1a; margin-bottom: 1rem;
-}
-
-/* ── Card wisata ── */
-.card {
-    background: #fff;
-    border-radius: 20px;
-    overflow: hidden;
-    border: 1px solid #dde8de;
-    box-shadow: 0 2px 12px rgba(15,45,26,.06);
-    transition: transform .18s, box-shadow .18s;
-    height: 100%;
-    display: flex; flex-direction: column;
-}
-.card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 8px 28px rgba(15,45,26,.13);
-}
-.card-img-wrap { position: relative; aspect-ratio: 4/3; overflow: hidden; background: #e6f0e8; }
-.card-img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.card-kat-badge {
-    position: absolute; top: 10px; left: 10px;
-    background: rgba(15,45,26,.78); color: #7edaa0;
-    font-size: 0.67rem; font-weight: 700; letter-spacing: .06em;
-    text-transform: uppercase; padding: 4px 10px; border-radius: 999px;
-    backdrop-filter: blur(4px);
-}
-.card-score-badge {
-    position: absolute; top: 10px; right: 10px;
-    background: rgba(45,158,90,.9); color: #fff;
-    font-size: 0.72rem; font-weight: 800;
-    padding: 4px 10px; border-radius: 999px;
-}
-.card-body { padding: 14px 16px 16px; flex: 1; display: flex; flex-direction: column; gap: 6px; }
-.card-nama {
-    font-family: 'Lora', serif;
-    font-size: 1rem; font-weight: 600; color: #0f2d1a;
-    line-height: 1.35; margin-bottom: 4px;
-}
-.card-meta { display: flex; flex-wrap: wrap; gap: 5px; }
-.badge {
-    display: inline-flex; align-items: center; gap: 3px;
-    border-radius: 999px; padding: 3px 10px;
-    font-size: 0.73rem; font-weight: 600;
-}
-.badge-kota { background: #e8f5eb; color: #1a5c33; }
-.badge-harga { background: #fff8e6; color: #8a6200; }
-.badge-rating { background: #fff3e0; color: #c05c00; }
-.card-desc {
-    font-size: 0.79rem; color: #5a7060; line-height: 1.55;
-    flex: 1;
-    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
-.card-btn {
-    margin-top: auto;
-    display: block; width: 100%; text-align: center;
-    background: #f0f9f3; color: #1a5c33;
-    border: 1.5px solid #b8ddc0; border-radius: 10px;
-    padding: 8px; font-size: 0.82rem; font-weight: 700;
-    cursor: pointer; transition: background .15s, color .15s;
-}
-.card-btn:hover { background: #2d9e5a; color: #fff; border-color: #2d9e5a; }
-
-/* ── Detail Panel ── */
-.detail-wrap {
-    background: #fff; border-radius: 24px;
-    border: 1px solid #dde8de;
-    box-shadow: 0 4px 24px rgba(15,45,26,.08);
-    overflow: hidden; margin-bottom: 2rem;
-}
-.detail-img { width: 100%; aspect-ratio: 16/7; object-fit: cover; display: block; background: #e6f0e8; }
-.detail-body { padding: 2rem 2.5rem; }
-.detail-nama {
-    font-family: 'Lora', serif; font-size: 1.9rem;
-    font-weight: 600; color: #0f2d1a; margin-bottom: .6rem; line-height: 1.2;
-}
-.detail-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 1.2rem; }
-.info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px,1fr)); gap: 12px; margin-bottom: 1.6rem; }
-.info-box { background: #f5faf6; border: 1px solid #dde8de; border-radius: 12px; padding: 12px 14px; }
-.info-box-label { font-size: 0.68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #6a9070; margin-bottom: 4px; }
-.info-box-value { font-size: 1rem; font-weight: 700; color: #0f2d1a; }
-.detail-desc { font-size: 0.93rem; color: #3d5c42; line-height: 1.75; }
-
-/* ── Empty state ── */
-.empty-state {
-    text-align: center; padding: 3rem 1rem;
-    color: #7a9a80; font-size: 0.95rem;
-}
-.empty-icon { font-size: 3rem; margin-bottom: .8rem; }
-
-/* ── Divider ── */
-.divider { height: 1px; background: #dde8de; margin: 1.5rem 0; }
-
-/* ── Tab custom ── */
-[data-baseweb="tab-list"] { background: #f0f9f3 !important; border-radius: 12px !important; padding: 4px !important; gap: 4px; }
-[data-baseweb="tab"] { border-radius: 9px !important; font-weight: 600 !important; font-size: 0.84rem !important; }
-[aria-selected="true"][data-baseweb="tab"] { background: #fff !important; color: #1a5c33 !important; }
-
-/* ── Metric override ── */
-div[data-testid="metric-container"] {
-    background: #fff; border: 1px solid #dde8de;
-    border-radius: 14px; padding: 14px 18px;
-}
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #f0f4f0; }
-::-webkit-scrollbar-thumb { background: #b8ddc0; border-radius: 6px; }
-</style>
-""", unsafe_allow_html=True)
+# =========================================================
+# LOAD DATA DAN MODEL
+# =========================================================
+def find_dataset_path() -> Path:
+    for path in DATA_PATH_CANDIDATES:
+        if path.exists():
+            return path
+    return DATA_PATH_CANDIDATES[0]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
-PLACEHOLDER = "https://placehold.co/640x480/e6f0e8/6a9070?text=Gambar+Tidak+Tersedia"
+@st.cache_data(show_spinner=False)
+def load_dataset(path_string: str) -> pd.DataFrame:
+    data = pd.read_csv(path_string)
+    data = data.reset_index(drop=True)
+    return data
 
-def fmt_rupiah(x):
+
+@st.cache_resource(show_spinner=False)
+def build_tfidf_model(text_data: tuple[str, ...]):
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(text_data)
+    similarity_matrix = cosine_similarity(tfidf_matrix, tfidf_matrix)
+    return vectorizer, tfidf_matrix, similarity_matrix
+
+
+# =========================================================
+# FUNGSI PERHITUNGAN
+# =========================================================
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    Menghitung jarak dua titik koordinat dalam kilometer.
+    Formula ini sesuai dengan tahap Context-Aware Re-ranking pada Bab 3.
+    """
+    earth_radius = 6371
+
+    lat1 = np.radians(lat1)
+    lon1 = np.radians(lon1)
+    lat2 = np.radians(lat2)
+    lon2 = np.radians(lon2)
+
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
+
+    a = (
+        np.sin(delta_lat / 2) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin(delta_lon / 2) ** 2
+    )
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return earth_radius * c
+
+
+def format_rupiah(value):
     try:
-        v = int(float(x))
-        return "Gratis" if v == 0 else f"Rp {v:,.0f}".replace(",", ".")
-    except Exception:
+        value = int(float(value))
+    except (TypeError, ValueError):
         return "Rp 0"
-
-def stars(r):
-    try:
-        r = float(r)
-        full = int(r); half = 1 if r - full >= 0.5 else 0; empty = 5 - full - half
-        return "★" * full + ("½" if half else "") + "☆" * empty
-    except Exception:
-        return "☆☆☆☆☆"
-
-def get_img(val):
-    s = str(val).strip()
-    if s.startswith("http://") or s.startswith("https://"):
-        return s
-    if s.startswith("koleksi_gambar") or (s and s not in ["BELUM_DIISI", "nan", ""]):
-        return s          # path lokal — Streamlit bisa serve jika file ada
-    return PLACEHOLDER
-
-def short_desc(text, words=50):
-    txt = str(text).strip()
-    if txt in ["BELUM DIISI", "", "nan"]:
-        return "Deskripsi belum tersedia."
-    ws = txt.split()
-    return " ".join(ws[:words]) + ("…" if len(ws) > words else "")
-
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    la1, lo1, la2, lo2 = map(math.radians, [lat1, lon1, lat2, lon2])
-    a = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
-    return R * 2 * math.asin(math.sqrt(a))
+    return f"Rp {value:,.0f}".replace(",", ".")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SESSION STATE
-# ══════════════════════════════════════════════════════════════════════════════
-for k, v in {
-    "view": "home",        # home | detail | hasil
-    "detail_id": None,
-    "hasil_df": None,
-    "map_klik_lat": -7.0,
-    "map_klik_lon": 110.4,
-    "use_map_loc": False,
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+def build_reference_labels(data: pd.DataFrame):
+    option_map = {}
+    labels = []
+    for _, row in data.iterrows():
+        label = (
+            f"{row['nama_wisata']} | {row['kota']} | "
+            f"{row['kategori']} | ID {row['place_id']}"
+        )
+        labels.append(label)
+        option_map[label] = row["place_id"]
+    return labels, option_map
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  LOAD DATA + MODEL  (di-cache)
-# ══════════════════════════════════════════════════════════════════════════════
-@st.cache_data(show_spinner="⏳ Memuat data dan membangun model rekomendasi…")
-def load_model():
-    try:
-        df = pd.read_csv("DATASET_WISATA_FINAL_READY.csv")
-    except FileNotFoundError:
-        # fallback nama lain
-        import glob, os
-        candidates = glob.glob("DATASET_WISATA*.csv")
-        if candidates:
-            df = pd.read_csv(candidates[0])
-        else:
-            st.error("❌ File dataset tidak ditemukan. Letakkan DATASET_WISATA_FINAL_READY.csv sefolder dengan app.py.")
-            st.stop()
+def resolve_image_source(image_value):
+    """
+    Mendukung dua jenis gambar:
+    1. URL online, misalnya https://...
+    2. File lokal, misalnya koleksi_gambar/Nama Wisata/Image_1.jpg
+    """
+    if image_value is None:
+        return None
 
-    # Bersihkan tipe
-    for c in ["nama_wisata", "deskripsi", "kategori", "kota", "gambar", "fitur_gabungan"]:
-        df[c] = df[c].fillna("").astype(str)
-    df["harga"]  = pd.to_numeric(df["harga"],  errors="coerce").fillna(0).astype(int)
-    df["rating"] = pd.to_numeric(df["rating"], errors="coerce").fillna(0.0).round(1)
-    df["lat"]    = pd.to_numeric(df["lat"],    errors="coerce")
-    df["long"]   = pd.to_numeric(df["long"],   errors="coerce")
-    df = df.dropna(subset=["lat","long"]).reset_index(drop=True)
+    image_text = str(image_value).strip()
 
-    # ── Modeling: TF-IDF + Cosine Similarity ──────────────────────────────────
-    tfidf = TfidfVectorizer(max_features=8000, ngram_range=(1,2), min_df=1)
-    mat   = tfidf.fit_transform(df["fitur_gabungan"])
-    cos   = cosine_similarity(mat, mat)
+    if not image_text or image_text.upper() in {"BELUM_DIISI", "NAN", "NONE", "-"}:
+        return None
 
-    # ── Normalisasi skor untuk weighted scoring ────────────────────────────────
-    df["rating_norm"] = df["rating"] / 5.0
-    h_max = df["harga"].max() if df["harga"].max() > 0 else 1
-    df["harga_norm"]  = df["harga"] / h_max   # 0=gratis, 1=termahal
+    if image_text.startswith(("http://", "https://")):
+        return image_text
 
-    return df, cos
+    possible_paths = [
+        BASE_DIR / image_text,
+        BASE_DIR / "koleksi_gambar" / image_text,
+        BASE_DIR / "images" / image_text,
+        BASE_DIR / "assets" / image_text,
+    ]
 
-df, cos_sim = load_model()
+    for path in possible_paths:
+        if path.exists():
+            return str(path)
+
+    return None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ENGINE REKOMENDASI  (Bab 3 — alur sistem)
-# ══════════════════════════════════════════════════════════════════════════════
-def get_rekomendasi(
-    ref_id=None,           # place_id referensi (int|None)
-    kategori_list=None,    # list kategori filter
-    kota_list=None,        # list kota filter
-    max_harga=None,        # int
-    min_rating=0.0,        # float
-    top_n=10,
-    exclude_id=None,       # place_id yang tidak ditampilkan (referensi itu sendiri)
+def create_recommendation(
+    data: pd.DataFrame,
+    similarity_matrix: np.ndarray,
+    reference_place_id,
+    selected_city: str,
+    selected_category: str,
+    keyword: str,
+    max_budget: int,
+    min_rating: float,
+    top_n: int,
+    use_location: bool,
+    user_lat: float | None,
+    user_long: float | None,
+    radius_km: float,
 ) -> pd.DataFrame:
-    """
-    Skor akhir = 0.6 × cosine_sim + 0.3 × rating_norm + 0.1 × (1 - harga_norm)
-    Harga dibalik: murah = lebih disukai
-    """
-    cand = df.copy()
+    result = data.copy()
 
-    # ── Step 1: Filter preferensi ────────────────────────────────────────────
-    if kategori_list:
-        cand = cand[cand["kategori"].isin(kategori_list)]
-    if kota_list:
-        cand = cand[cand["kota"].isin(kota_list)]
-    if max_harga is not None:
-        cand = cand[(cand["harga"] <= max_harga) | (cand["harga"] == 0)]
-    cand = cand[cand["rating"] >= min_rating]
-    if exclude_id is not None:
-        cand = cand[cand["place_id"] != exclude_id]
+    has_reference = reference_place_id is not None
 
-    if cand.empty:
-        return pd.DataFrame()
+    if has_reference:
+        reference_rows = data.index[data["place_id"] == reference_place_id].tolist()
 
-    # ── Step 2: Cosine Similarity ────────────────────────────────────────────
-    if ref_id is not None:
-        idx = df[df["place_id"] == ref_id].index
-        if len(idx):
-            sim_scores = cos_sim[idx[0]]
-            cand = cand.copy()
-            cand["cos_sim"] = cand.index.map(lambda i: sim_scores[i])
-        else:
-            cand["cos_sim"] = 0.0
+        if not reference_rows:
+            return pd.DataFrame()
+
+        reference_index = reference_rows[0]
+        result["similarity_score"] = similarity_matrix[reference_index]
+        result = result[result.index != reference_index]
     else:
-        cand["cos_sim"] = 0.0
+        result["similarity_score"] = 0.0
 
-    # ── Step 3: Weighted Score (Bab 3 - Rumus Final) ─────────────────────────
-    cand["final_score"] = (
-        0.6 * cand["cos_sim"] +
-        0.3 * cand["rating_norm"] +
-        0.1 * (1 - cand["harga_norm"])
+    if selected_city != ALL_CITY:
+        result = result[result["kota"] == selected_city]
+
+    if selected_category != ALL_CATEGORY:
+        result = result[result["kategori"] == selected_category]
+
+    if keyword.strip():
+        keyword_lower = keyword.strip().lower()
+        result = result[
+            result["nama_wisata"].astype(str).str.lower().str.contains(keyword_lower, na=False)
+            | result["deskripsi"].astype(str).str.lower().str.contains(keyword_lower, na=False)
+            | result["kategori"].astype(str).str.lower().str.contains(keyword_lower, na=False)
+            | result["kota"].astype(str).str.lower().str.contains(keyword_lower, na=False)
+        ]
+
+    result = result[result["harga"] <= max_budget]
+    result = result[result["rating"] >= min_rating]
+
+    max_rating = float(data["rating"].max())
+    if max_rating <= 0:
+        max_rating = 5.0
+
+    result["rating_score"] = result["rating"] / max_rating
+
+    has_location = (
+        use_location
+        and user_lat is not None
+        and user_long is not None
+        and not math.isnan(float(user_lat))
+        and not math.isnan(float(user_long))
+        and radius_km > 0
     )
-    cand["final_score"] = (cand["final_score"] * 100).round(1)
 
-    return cand.sort_values("final_score", ascending=False).head(top_n)
+    if has_location:
+        result["distance_km"] = haversine_distance(
+            float(user_lat),
+            float(user_long),
+            result["lat"].astype(float),
+            result["long"].astype(float),
+        )
+
+        result = result[result["distance_km"] <= radius_km]
+        result["distance_score"] = 1 - (result["distance_km"] / radius_km)
+        result["distance_score"] = result["distance_score"].clip(lower=0, upper=1)
+    else:
+        result["distance_km"] = np.nan
+        result["distance_score"] = 0.0
+
+    if result.empty:
+        return result
+
+    if has_reference and has_location:
+        result["final_score"] = (
+            0.5 * result["similarity_score"]
+            + 0.3 * result["distance_score"]
+            + 0.2 * result["rating_score"]
+        )
+        scenario = "Content-Based Filtering + Context-Aware Re-ranking"
+    elif has_reference and not has_location:
+        result["final_score"] = (
+            0.7 * result["similarity_score"]
+            + 0.3 * result["rating_score"]
+        )
+        scenario = "Content-Based Filtering + Rating Re-ranking"
+    elif not has_reference and has_location:
+        result["final_score"] = (
+            0.6 * result["distance_score"]
+            + 0.4 * result["rating_score"]
+        )
+        scenario = "Context-Aware Re-ranking berbasis lokasi dan rating"
+    else:
+        result["final_score"] = result["rating_score"]
+        scenario = "Rekomendasi berbasis rating"
+
+    result["scenario"] = scenario
+    result["skor_rekomendasi"] = (result["final_score"] * 100).round(2)
+
+    result = result.sort_values(
+        by=["final_score", "rating"],
+        ascending=[False, False],
+    ).head(top_n)
+
+    return result
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  KOMPONEN UI
-# ══════════════════════════════════════════════════════════════════════════════
-def render_card(row, cols_per_row=3):
-    """Render satu kartu wisata (HTML)."""
-    img = get_img(row["gambar"])
-    score = row.get("final_score", 0)
-    score_html = f"<div class='card-score-badge'>{score:.0f} pts</div>" if score > 0 else ""
-    desc50 = short_desc(row["deskripsi"])
-    harga_fmt = fmt_rupiah(row["harga"])
+def show_recommendation_card(row, rank: int, use_location: bool):
+    with st.container(border=True):
+        st.subheader(f"{rank}. {row['nama_wisata']}")
 
-    html = f"""
-    <div class='card'>
-      <div class='card-img-wrap'>
-        <img src='{img}' onerror="this.src='{PLACEHOLDER}'" loading='lazy'/>
-        <div class='card-kat-badge'>{row['kategori']}</div>
-        {score_html}
-      </div>
-      <div class='card-body'>
-        <div class='card-nama'>{row['nama_wisata']}</div>
-        <div class='card-meta'>
-          <span class='badge badge-kota'>📍 {row['kota']}</span>
-          <span class='badge badge-rating'>⭐ {float(row['rating']):.1f}</span>
-          <span class='badge badge-harga'>💰 {harga_fmt}</span>
-        </div>
-        <div class='card-desc'>{desc50}</div>
-      </div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
-    if st.button("Lihat Detail →", key=f"btn_detail_{row['place_id']}_{score}",
-                 use_container_width=True):
-        st.session_state.detail_id = int(row["place_id"])
-        st.session_state.view = "detail"
-        st.rerun()
+        image_col, info_col = st.columns([1, 2], vertical_alignment="top")
 
+        with image_col:
+            image_source = resolve_image_source(row.get("gambar"))
+            if image_source:
+                st.image(image_source, use_container_width=True)
+            else:
+                st.info("Gambar tidak tersedia.")
 
-def render_grid(hasil: pd.DataFrame, n_cols=3):
-    """Grid kartu rekomendasi."""
-    rows_data = [hasil.iloc[i:i+n_cols] for i in range(0, len(hasil), n_cols)]
-    for row_group in rows_data:
-        cols = st.columns(n_cols)
-        for col, (_, rec) in zip(cols, row_group.iterrows()):
-            with col:
-                render_card(rec, n_cols)
+        with info_col:
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("Skor", f"{row['skor_rekomendasi']:.2f}")
+            metric_cols[1].metric("Rating", f"{row['rating']:.1f}")
+            metric_cols[2].metric("Harga", format_rupiah(row["harga"]))
+
+            if use_location and pd.notna(row.get("distance_km")):
+                metric_cols[3].metric("Jarak", f"{row['distance_km']:.2f} km")
+            else:
+                metric_cols[3].metric("Kota", str(row["kota"]))
+
+            st.markdown(
+                f"""
+                **Kategori:** {row['kategori']}  
+                **Kota:** {row['kota']}  
+                **Similarity Score:** {row['similarity_score']:.4f}  
+                **Distance Score:** {row['distance_score']:.4f}  
+                **Rating Score:** {row['rating_score']:.4f}
+                """
+            )
+
+            with st.expander("Lihat deskripsi"):
+                st.write(row["deskripsi"])
 
 
-def render_detail(place_id: int, show_back=True):
-    """Halaman detail destinasi wisata."""
-    row_df = df[df["place_id"] == place_id]
-    if row_df.empty:
-        st.error("Data tidak ditemukan.")
-        return
-    r = row_df.iloc[0]
+def create_map(result: pd.DataFrame, use_location: bool, user_lat=None, user_long=None):
+    if result.empty:
+        return None
 
-    if show_back:
-        if st.button("← Kembali", key="back_btn"):
-            st.session_state.view = "home" if st.session_state.hasil_df is None else "hasil"
-            st.rerun()
+    if use_location and user_lat is not None and user_long is not None:
+        center = [float(user_lat), float(user_long)]
+        zoom_start = 11
+    else:
+        center = [float(result["lat"].mean()), float(result["long"].mean())]
+        zoom_start = 8
 
-    # ── Gambar & nama ──────────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div class='detail-wrap'>
-      <img class='detail-img' src='{get_img(r["gambar"])}'
-           onerror="this.src='{PLACEHOLDER}'"/>
-      <div class='detail-body'>
-        <div class='sec-label'>{r['kategori']} · {r['kota']}</div>
-        <div class='detail-nama'>{r['nama_wisata']}</div>
-        <div class='detail-badges'>
-          <span class='badge badge-rating' style='font-size:.9rem;padding:5px 14px;'>
-            ⭐ {float(r['rating']):.1f}
-          </span>
-          <span class='badge badge-harga' style='font-size:.9rem;padding:5px 14px;'>
-            💰 {fmt_rupiah(r['harga'])}
-          </span>
-          <span class='badge badge-kota' style='font-size:.9rem;padding:5px 14px;'>
-            📍 {r['kota']}
-          </span>
-        </div>
-        <div class='info-grid'>
-          <div class='info-box'>
-            <div class='info-box-label'>Kategori</div>
-            <div class='info-box-value'>{r['kategori']}</div>
-          </div>
-          <div class='info-box'>
-            <div class='info-box-label'>Harga Tiket</div>
-            <div class='info-box-value'>{fmt_rupiah(r['harga'])}</div>
-          </div>
-          <div class='info-box'>
-            <div class='info-box-label'>Rating</div>
-            <div class='info-box-value'>{float(r['rating']):.1f} ⭐ <small style='color:#6a9070;font-size:.75rem;'>{stars(r['rating'])}</small></div>
-          </div>
-          <div class='info-box'>
-            <div class='info-box-label'>Koordinat</div>
-            <div class='info-box-value' style='font-size:.85rem;'>{float(r['lat']):.5f}, {float(r['long']):.5f}</div>
-          </div>
-        </div>
-        <div class='detail-desc'>{r['deskripsi'] if str(r['deskripsi']).strip() not in ['BELUM DIISI','','nan'] else 'Deskripsi belum tersedia.'}</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    recommendation_map = folium.Map(location=center, zoom_start=zoom_start)
 
-    # ── Tabs: Peta + Serupa ────────────────────────────────────────────────────
-    tab_map, tab_sim = st.tabs(["🗺️ Peta Lokasi", "🔗 Wisata Serupa"])
-
-    with tab_map:
-        m = folium.Map(location=[float(r["lat"]), float(r["long"])], zoom_start=15)
+    if use_location and user_lat is not None and user_long is not None:
         folium.Marker(
-            [float(r["lat"]), float(r["long"])],
-            popup=folium.Popup(
-                f"<b>{r['nama_wisata']}</b><br>⭐ {float(r['rating']):.1f} · {fmt_rupiah(r['harga'])}",
-                max_width=240
-            ),
-            tooltip=r["nama_wisata"],
-            icon=folium.Icon(color="green", icon="map-marker"),
-        ).add_to(m)
-        st_folium(m, height=360, key=f"peta_detail_{place_id}", returned_objects=[])
+            location=[float(user_lat), float(user_long)],
+            popup="Lokasi Pengguna",
+            tooltip="Lokasi Pengguna",
+            icon=folium.Icon(color="red", icon="user", prefix="fa"),
+        ).add_to(recommendation_map)
 
-    with tab_sim:
-        sim_df = get_rekomendasi(ref_id=place_id, top_n=5, exclude_id=place_id)
-        if sim_df.empty:
-            st.markdown("<div class='empty-state'><div class='empty-icon'>🔍</div>Tidak ada wisata serupa ditemukan.</div>",
-                        unsafe_allow_html=True)
-        else:
-            st.markdown("<p style='color:#6a9070;font-size:.85rem;margin-bottom:.8rem;'>5 destinasi paling mirip berdasarkan konten</p>",
-                        unsafe_allow_html=True)
-            render_grid(sim_df, n_cols=5)
+    for _, row in result.iterrows():
+        popup_html = f"""
+        <b>{html.escape(str(row['nama_wisata']))}</b><br>
+        Kategori: {html.escape(str(row['kategori']))}<br>
+        Kota: {html.escape(str(row['kota']))}<br>
+        Rating: {row['rating']}<br>
+        Harga: {format_rupiah(row['harga'])}<br>
+        Skor: {row['skor_rekomendasi']:.2f}
+        """
 
+        if pd.notna(row.get("distance_km")):
+            popup_html += f"<br>Jarak: {row['distance_km']:.2f} km"
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR — PREFERENSI
-# ══════════════════════════════════════════════════════════════════════════════
-with st.sidebar:
-    st.markdown("""
-    <div style='padding:1.2rem 0 .8rem;'>
-      <div style='font-family:Lora,serif;font-size:1.35rem;font-weight:600;color:#7edaa0;line-height:1.2;'>
-        🌿 WisataJawa
-      </div>
-      <div style='font-size:.76rem;color:#6a9070;margin-top:3px;'>Sistem Rekomendasi Wisata</div>
-    </div>
-    <hr style='border-color:#1a3d25;margin:.5rem 0 1.2rem;'/>
-    """, unsafe_allow_html=True)
+        folium.Marker(
+            location=[float(row["lat"]), float(row["long"])],
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=str(row["nama_wisata"]),
+            icon=folium.Icon(color="blue", icon="map-marker", prefix="fa"),
+        ).add_to(recommendation_map)
 
-    # Navigasi
-    nav = st.radio("Menu", ["🏠 Beranda & Peta", "🔍 Cari Rekomendasi"],
-                   label_visibility="collapsed")
-
-    st.markdown("<hr style='border-color:#1a3d25;margin:.8rem 0;'/>", unsafe_allow_html=True)
-
-    # ── Preferensi Rekomendasi ──────────────────────────────────────────────
-    st.markdown("<p style='font-size:.8rem;font-weight:700;color:#7edaa0;letter-spacing:.05em;text-transform:uppercase;'>Preferensi</p>",
-                unsafe_allow_html=True)
-
-    semua_kat   = sorted(df["kategori"].unique().tolist())
-    semua_kota  = sorted(df["kota"].unique().tolist())
-
-    ref_options = ["— Tidak Ada —"] + sorted(df["nama_wisata"].tolist())
-    ref_name = st.selectbox("🏛️ Wisata Referensi", ref_options,
-                            help="Cari wisata serupa dengan tempat ini")
-
-    pilih_kat  = st.multiselect("🎯 Kategori", semua_kat,
-                                placeholder="Semua kategori")
-    pilih_kota = st.multiselect("🏙️ Kota", semua_kota,
-                                placeholder="Semua kota")
-
-    harga_max  = st.slider("💰 Harga Maksimal (Rp)", 0,
-                           int(df["harga"].max()), int(df["harga"].max()),
-                           step=10_000, format="Rp %d")
-
-    min_rat    = st.slider("⭐ Rating Minimum", 1.0, 5.0, 1.0, 0.1)
-    top_n      = st.slider("📋 Jumlah Rekomendasi", 5, 20, 10)
-
-    st.markdown("<div style='height:.6rem'/>", unsafe_allow_html=True)
-    cari_btn = st.button("🔍 Cari Rekomendasi", use_container_width=True)
-
-    st.markdown("<hr style='border-color:#1a3d25;margin:.8rem 0;'/>", unsafe_allow_html=True)
-    st.markdown(f"<p style='font-size:.72rem;color:#4a7050;text-align:center;'>{len(df)} destinasi wisata · Pulau Jawa</p>",
-                unsafe_allow_html=True)
+    return recommendation_map
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PROSES KLIK REKOMENDASI
-# ══════════════════════════════════════════════════════════════════════════════
-if cari_btn:
-    ref_id = None
-    if ref_name != "— Tidak Ada —":
-        match = df[df["nama_wisata"] == ref_name]
-        if not match.empty:
-            ref_id = int(match.iloc[0]["place_id"])
+# =========================================================
+# LOAD APLIKASI
+# =========================================================
+st.title("🧭 Sistem Rekomendasi Destinasi Wisata di Indonesia")
+st.caption(
+    "Content-Based Filtering menggunakan TF-IDF dan Cosine Similarity, "
+    "dengan Context-Aware Re-ranking berdasarkan lokasi, radius, budget, rating, kategori, dan kota."
+)
 
-    hasil = get_rekomendasi(
-        ref_id=ref_id,
-        kategori_list=pilih_kat if pilih_kat else None,
-        kota_list=pilih_kota if pilih_kota else None,
-        max_harga=harga_max,
-        min_rating=min_rat,
-        top_n=top_n,
-        exclude_id=ref_id,
+dataset_path = find_dataset_path()
+
+if not dataset_path.exists():
+    st.error(
+        "Dataset tidak ditemukan. Letakkan file "
+        "`DATASET_WISATA_READY_MODELING_FINAL.csv` di folder `data/`."
     )
-    st.session_state.hasil_df = hasil
-    st.session_state.view = "hasil"
-    st.rerun()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  ROUTING VIEW
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── DETAIL VIEW ───────────────────────────────────────────────────────────────
-if st.session_state.view == "detail" and st.session_state.detail_id:
-    render_detail(st.session_state.detail_id)
     st.stop()
 
-# ── HASIL VIEW ────────────────────────────────────────────────────────────────
-if st.session_state.view == "hasil" and st.session_state.hasil_df is not None:
-    hasil = st.session_state.hasil_df
+data = load_dataset(str(dataset_path))
 
-    # Hero kecil
-    st.markdown(f"""
-    <div class='hero-wrap' style='padding:1.8rem 2.5rem;'>
-      <div style='display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;'>
-        <div>
-          <div class='sec-label' style='color:#7edaa0;'>Hasil Rekomendasi</div>
-          <div class='hero-title' style='font-size:1.8rem;'>
-            Ditemukan <span>{len(hasil)}</span> Destinasi
-          </div>
-          <div class='hero-sub'>Diurutkan berdasarkan skor kesesuaian</div>
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if st.button("← Kembali ke Beranda", key="back_home"):
-        st.session_state.view = "home"
-        st.session_state.hasil_df = None
-        st.rerun()
-
-    if hasil.empty:
-        st.markdown("""
-        <div class='empty-state'>
-          <div class='empty-icon'>😕</div>
-          <b>Tidak ada destinasi yang cocok.</b><br>
-          Coba longgarkan filter kategori, kota, atau budget.
-        </div>
-        """, unsafe_allow_html=True)
-        st.stop()
-
-    # ── Peta hasil ──────────────────────────────────────────────────────────────
-    with st.expander("🗺️ Lihat Semua Lokasi di Peta", expanded=False):
-        m_hasil = folium.Map(
-            location=[hasil["lat"].mean(), hasil["long"].mean()],
-            zoom_start=8
-        )
-        colors = ["green","blue","purple","orange","red","darkgreen","cadetblue",
-                  "darkblue","lightred","pink","darkred","lightblue","lightgreen"]
-        for i, (_, rec) in enumerate(hasil.iterrows()):
-            folium.Marker(
-                [float(rec["lat"]), float(rec["long"])],
-                popup=folium.Popup(
-                    f"<b>#{i+1} {rec['nama_wisata']}</b><br>"
-                    f"{rec['kota']} · {rec['kategori']}<br>"
-                    f"⭐ {float(rec['rating']):.1f} · {fmt_rupiah(rec['harga'])}<br>"
-                    f"Skor: {rec['final_score']:.1f}",
-                    max_width=250
-                ),
-                tooltip=f"#{i+1} {rec['nama_wisata']}",
-                icon=folium.Icon(color=colors[i % len(colors)], icon="map-marker"),
-            ).add_to(m_hasil)
-        st_folium(m_hasil, height=400, key="peta_hasil", returned_objects=[])
-
-    st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-
-    # ── Grid kartu ──────────────────────────────────────────────────────────────
-    render_grid(hasil, n_cols=3)
-
-    # ── Tabel ringkasan ─────────────────────────────────────────────────────────
-    st.markdown("<div class='divider'/>", unsafe_allow_html=True)
-    with st.expander("📊 Tabel Ringkasan", expanded=False):
-        tbl = hasil[["nama_wisata","kategori","kota","harga","rating","final_score"]].copy()
-        tbl.index = range(1, len(tbl)+1)
-        tbl.columns = ["Nama","Kategori","Kota","Harga (Rp)","Rating","Skor"]
-        st.dataframe(tbl, use_container_width=True)
-
+missing_columns = [col for col in REQUIRED_COLUMNS if col not in data.columns]
+if missing_columns:
+    st.error(f"Kolom wajib belum tersedia: {', '.join(missing_columns)}")
     st.stop()
 
+# Dataset sudah siap modeling. Bagian ini hanya memastikan index stabil untuk model.
+data = data.reset_index(drop=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  HOME VIEW
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── Hero ──────────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<div class='hero-wrap'>
-  <div class='hero-title'>
-    Temukan <span>Destinasi Wisata</span><br>Pulau Jawa Impianmu
-  </div>
-  <div class='hero-sub'>
-    Content-Based Filtering · {len(df):,} destinasi di seluruh Pulau Jawa
-  </div>
-  <div class='hero-stats'>
-    <div class='hstat'>
-      <div class='hstat-num'>{len(df):,}</div>
-      <div class='hstat-label'>Destinasi</div>
-    </div>
-    <div class='hstat'>
-      <div class='hstat-num'>{df['kota'].nunique()}</div>
-      <div class='hstat-label'>Kota</div>
-    </div>
-    <div class='hstat'>
-      <div class='hstat-num'>{df['kategori'].nunique()}</div>
-      <div class='hstat-label'>Kategori</div>
-    </div>
-    <div class='hstat'>
-      <div class='hstat-num'>{df['rating'].mean():.1f}⭐</div>
-      <div class='hstat-label'>Rata-rata Rating</div>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ── Search Bar ────────────────────────────────────────────────────────────────
-st.markdown("<div class='sec-label'>Cari Destinasi</div>", unsafe_allow_html=True)
-col_search, col_go = st.columns([5, 1])
-with col_search:
-    cari_nama = st.selectbox(
-        "Ketik nama tempat wisata…",
-        options=[""] + sorted(df["nama_wisata"].tolist()),
-        label_visibility="collapsed",
-        key="search_box",
+with st.spinner("Membangun model TF-IDF dan Cosine Similarity..."):
+    _, tfidf_matrix, similarity_matrix = build_tfidf_model(
+        tuple(data["fitur_gabungan"].astype(str).tolist())
     )
-with col_go:
-    go_btn = st.button("Lihat Detail", type="primary", use_container_width=True)
 
-if go_btn and cari_nama:
-    match = df[df["nama_wisata"] == cari_nama]
-    if not match.empty:
-        st.session_state.detail_id = int(match.iloc[0]["place_id"])
-        st.session_state.view = "detail"
-        st.rerun()
 
-st.markdown("<div class='divider'/>", unsafe_allow_html=True)
+# =========================================================
+# SIDEBAR INPUT
+# =========================================================
+st.sidebar.header("Input Preferensi Pengguna")
 
-# ── Peta Eksplorasi ───────────────────────────────────────────────────────────
-st.markdown("<div class='sec-label'>Peta Interaktif</div>", unsafe_allow_html=True)
-st.markdown("<div class='sec-title'>Eksplorasi Semua Destinasi</div>", unsafe_allow_html=True)
-st.caption("Klik titik pada peta untuk melihat lokasi destinasi. Klik nama pada popup untuk membuka detail.")
+reference_labels, reference_map = build_reference_labels(data)
+reference_choice = st.sidebar.selectbox(
+    "Wisata referensi",
+    [NO_REFERENCE] + reference_labels,
+    help="Pilih destinasi acuan untuk mencari wisata lain yang mirip.",
+)
 
-col_peta, col_info = st.columns([3, 1])
+reference_place_id = None
+if reference_choice != NO_REFERENCE:
+    reference_place_id = reference_map[reference_choice]
 
-with col_peta:
-    lat_c = df["lat"].mean(); lon_c = df["long"].mean()
-    m_home = folium.Map(location=[lat_c, lon_c], zoom_start=7,
-                        tiles="CartoDB Positron")
+city_options = [ALL_CITY] + sorted(data["kota"].dropna().unique().tolist())
+selected_city = st.sidebar.selectbox(
+    "Kota tujuan",
+    city_options,
+    help="Pilih kota tujuan. Gunakan 'Semua Kota' jika tidak ingin membatasi kota.",
+)
 
-    kat_color = {
-        "Budaya": "orange", "Taman Hiburan": "green", "Cagar Alam": "darkgreen",
-        "Bahari": "blue", "Pusat Perbelanjaan": "purple", "Tempat Ibadah": "red",
-    }
-    mc = MarkerCluster(
-        options={"maxClusterRadius": 40, "spiderfyOnMaxZoom": True}
-    ).add_to(m_home)
+category_options = [ALL_CATEGORY] + sorted(data["kategori"].dropna().unique().tolist())
+selected_category = st.sidebar.selectbox(
+    "Kategori wisata",
+    category_options,
+    help="Pilih kategori wisata. Gunakan 'Semua Kategori' jika tidak ingin membatasi kategori.",
+)
 
-    for _, r in df.iterrows():
-        warna = kat_color.get(r["kategori"], "gray")
-        pid = int(r["place_id"])
-        nm  = r["nama_wisata"].replace("'", "&#39;")
-        popup_html = (
-            "<b style='font-size:1rem;'>" + r["nama_wisata"] + "</b><br>"
-            "<span style='color:#6a9070;'>" + r["kategori"] + " · " + r["kota"] + "</span><br>"
-            "⭐ " + str(round(float(r["rating"]),1)) + " | 💰 " + fmt_rupiah(r["harga"])
+keyword = st.sidebar.text_input(
+    "Kata kunci pencarian",
+    placeholder="Contoh: pantai, museum, taman",
+    help="Opsional. Digunakan untuk menyaring nama, deskripsi, kategori, atau kota.",
+)
+
+max_price = int(data["harga"].max())
+max_budget = st.sidebar.number_input(
+    "Budget maksimal",
+    min_value=0,
+    max_value=max_price,
+    value=max_price,
+    step=5000,
+    help="Sistem hanya menampilkan wisata dengan harga tiket tidak melebihi budget.",
+)
+
+min_rating = st.sidebar.slider(
+    "Rating minimum",
+    min_value=0.0,
+    max_value=5.0,
+    value=0.0,
+    step=0.1,
+    help="Sistem hanya menampilkan wisata dengan rating minimal sesuai input.",
+)
+
+top_n = st.sidebar.slider(
+    "Jumlah rekomendasi",
+    min_value=1,
+    max_value=20,
+    value=5,
+    step=1,
+    help="Menentukan jumlah Top-N Recommendation.",
+)
+
+st.sidebar.divider()
+use_location = st.sidebar.checkbox(
+    "Gunakan lokasi pengguna",
+    value=False,
+    help="Aktifkan untuk menghitung jarak dengan Formula Haversine.",
+)
+
+user_lat = None
+user_long = None
+radius_km = 50.0
+
+if use_location:
+    location_method = st.sidebar.radio(
+        "Metode input lokasi",
+        ["Pilih kota asal", "Input koordinat manual", "Klik lokasi pada peta"],
+    )
+
+    radius_km = st.sidebar.slider(
+        "Radius pencarian (km)",
+        min_value=1,
+        max_value=500,
+        value=50,
+        step=1,
+    )
+
+    if location_method == "Pilih kota asal":
+        origin_city = st.sidebar.selectbox(
+            "Kota asal pengguna",
+            list(CITY_COORDINATES.keys()),
         )
-        folium.CircleMarker(
-            location=[float(r["lat"]), float(r["long"])],
-            radius=5, color=warna, fill=True,
-            fill_color=warna, fill_opacity=0.75, weight=1.5,
-            popup=folium.Popup(popup_html, max_width=260),
-            tooltip=f"{r['nama_wisata']} ⭐{float(r['rating']):.1f}",
-        ).add_to(mc)
+        user_lat, user_long = CITY_COORDINATES[origin_city]
 
-    # Legenda warna
-    legend_html = """
-    <div style='position:fixed;bottom:20px;right:20px;background:white;
-         border-radius:12px;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,.15);
-         font-size:11px;z-index:1000;'>
-      <b style='display:block;margin-bottom:6px;color:#0f2d1a;'>Kategori</b>
-      <span style='color:orange;'>●</span> Budaya &nbsp;
-      <span style='color:green;'>●</span> Taman Hiburan<br>
-      <span style='color:darkgreen;'>●</span> Cagar Alam &nbsp;
-      <span style='color:blue;'>●</span> Bahari<br>
-      <span style='color:purple;'>●</span> Perbelanjaan &nbsp;
-      <span style='color:red;'>●</span> Tempat Ibadah
-    </div>
-    """
-    m_home.get_root().html.add_child(folium.Element(legend_html))
+    elif location_method == "Input koordinat manual":
+        user_lat = st.sidebar.number_input(
+            "Latitude pengguna",
+            min_value=-11.5,
+            max_value=6.5,
+            value=-6.200000,
+            step=0.000001,
+            format="%.6f",
+        )
+        user_long = st.sidebar.number_input(
+            "Longitude pengguna",
+            min_value=95.0,
+            max_value=141.0,
+            value=106.816666,
+            step=0.000001,
+            format="%.6f",
+        )
 
-    hasil_peta = st_folium(m_home, height=500, key="peta_home",
-                           returned_objects=["last_clicked"])
+    else:
+        st.info("Klik titik lokasi pengguna pada peta di bawah, lalu tekan tombol rekomendasi di sidebar.")
 
-with col_info:
-    st.markdown("<div class='sec-label'>Distribusi</div>", unsafe_allow_html=True)
+        if "clicked_lat" not in st.session_state:
+            st.session_state.clicked_lat = -6.200000
+        if "clicked_long" not in st.session_state:
+            st.session_state.clicked_long = 106.816666
 
-    # Distribusi kategori
-    for kat, cnt in df["kategori"].value_counts().items():
-        pct = cnt / len(df) * 100
-        warna_css = {
-            "Budaya":"#e88a00","Taman Hiburan":"#2d9e5a","Cagar Alam":"#1a5c33",
-            "Bahari":"#1e6fa8","Pusat Perbelanjaan":"#7c4dbd","Tempat Ibadah":"#c0392b",
-        }.get(kat,"#888")
-        st.markdown(f"""
-        <div style='display:flex;align-items:center;gap:8px;margin-bottom:6px;'>
-          <div style='width:10px;height:10px;border-radius:50%;background:{warna_css};flex-shrink:0;'></div>
-          <div style='flex:1;font-size:.78rem;color:#3d5c42;'>{kat}</div>
-          <div style='font-size:.78rem;font-weight:700;color:#0f2d1a;'>{cnt}</div>
-        </div>
-        <div style='height:4px;background:#edf4ee;border-radius:4px;margin-bottom:10px;'>
-          <div style='width:{pct:.0f}%;height:100%;background:{warna_css};border-radius:4px;'></div>
-        </div>
-        """, unsafe_allow_html=True)
+        click_map = folium.Map(
+            location=[st.session_state.clicked_lat, st.session_state.clicked_long],
+            zoom_start=10,
+        )
+        folium.Marker(
+            [st.session_state.clicked_lat, st.session_state.clicked_long],
+            tooltip="Lokasi pengguna saat ini",
+            icon=folium.Icon(color="red", icon="user", prefix="fa"),
+        ).add_to(click_map)
 
-    st.markdown("<div style='height:.5rem'/>", unsafe_allow_html=True)
-    st.markdown("<div class='sec-label'>Top Kota</div>", unsafe_allow_html=True)
-    for kota, cnt in df["kota"].value_counts().head(6).items():
-        st.markdown(f"""
-        <div style='display:flex;justify-content:space-between;font-size:.8rem;
-             padding:4px 0;border-bottom:1px solid #edf4ee;'>
-          <span style='color:#3d5c42;'>📍 {kota}</span>
-          <span style='font-weight:700;color:#0f2d1a;'>{cnt}</span>
-        </div>
-        """, unsafe_allow_html=True)
+        clicked_data = st_folium(
+            click_map,
+            height=380,
+            width=1200,
+            key="location_picker_map",
+        )
 
-st.markdown("<div class='divider'/>", unsafe_allow_html=True)
+        if clicked_data and clicked_data.get("last_clicked"):
+            st.session_state.clicked_lat = clicked_data["last_clicked"]["lat"]
+            st.session_state.clicked_long = clicked_data["last_clicked"]["lng"]
 
-# ── Destinasi Populer (Home default cards) ────────────────────────────────────
-st.markdown("<div class='sec-label'>Populer</div>", unsafe_allow_html=True)
-st.markdown("<div class='sec-title'>Destinasi Terpopuler</div>", unsafe_allow_html=True)
+        user_lat = st.session_state.clicked_lat
+        user_long = st.session_state.clicked_long
 
-populer = df.sort_values("rating", ascending=False).head(9).copy()
-populer["final_score"] = 0.0
-render_grid(populer, n_cols=3)
+        st.success(f"Lokasi terpilih: {user_lat:.6f}, {user_long:.6f}")
 
-st.markdown("<div class='divider'/>", unsafe_allow_html=True)
+run_button = st.sidebar.button("Cari Rekomendasi", type="primary", use_container_width=True)
 
-# ── Per Kategori ──────────────────────────────────────────────────────────────
-st.markdown("<div class='sec-label'>Jelajahi</div>", unsafe_allow_html=True)
-st.markdown("<div class='sec-title'>Jelajahi per Kategori</div>", unsafe_allow_html=True)
+if run_button:
+    st.session_state["run_recommendation"] = True
 
-tab_labels = ["🏛️ Budaya", "🎢 Taman Hiburan", "🌿 Cagar Alam",
-              "🌊 Bahari", "🛍️ Perbelanjaan", "🕌 Tempat Ibadah"]
-kat_keys   = ["Budaya", "Taman Hiburan", "Cagar Alam",
-              "Bahari", "Pusat Perbelanjaan", "Tempat Ibadah"]
 
-tabs = st.tabs(tab_labels)
-for tab, kat in zip(tabs, kat_keys):
-    with tab:
-        sub = df[df["kategori"] == kat].sort_values("rating", ascending=False).head(6).copy()
-        sub["final_score"] = 0.0
-        if sub.empty:
-            st.markdown("<div class='empty-state'><div class='empty-icon'>🏝️</div>Data belum tersedia.</div>",
-                        unsafe_allow_html=True)
-        else:
-            render_grid(sub, n_cols=3)
+# =========================================================
+# INFORMASI DATASET
+# =========================================================
+summary_cols = st.columns(4)
+summary_cols[0].metric("Jumlah Destinasi", f"{len(data):,}".replace(",", "."))
+summary_cols[1].metric("Jumlah Kota", data["kota"].nunique())
+summary_cols[2].metric("Jumlah Kategori", data["kategori"].nunique())
+summary_cols[3].metric("Model", "TF-IDF + Cosine")
 
+with st.expander("Lihat alur input dan proses sistem"):
+    st.markdown(
+        """
+        **Alur sistem:**
+
+        1. Aplikasi membaca dataset akhir yang sudah siap modeling.
+        2. Sistem menggunakan kolom `fitur_gabungan` sebagai input TF-IDF.
+        3. TF-IDF mengubah teks destinasi menjadi representasi numerik.
+        4. Cosine Similarity menghitung kemiripan antar destinasi.
+        5. Pengguna mengisi wisata referensi, kota, kategori, budget, rating, lokasi, radius, dan jumlah rekomendasi.
+        6. Sistem menyaring kandidat berdasarkan preferensi pengguna.
+        7. Jika lokasi aktif, sistem menghitung jarak dengan Formula Haversine.
+        8. Sistem menghitung `Similarity Score`, `Distance Score`, `Rating Score`, dan `Final Score`.
+        9. Sistem menampilkan Top-N Recommendation dan peta lokasi wisata.
+        """
+    )
+
+with st.expander("Preview dataset"):
+    st.dataframe(
+        data[
+            [
+                "nama_wisata",
+                "kategori",
+                "kota",
+                "harga",
+                "rating",
+                "lat",
+                "long",
+            ]
+        ].head(20),
+        use_container_width=True,
+    )
+
+
+# =========================================================
+# HASIL REKOMENDASI
+# =========================================================
+if not st.session_state.get("run_recommendation", False):
+    st.info("Isi preferensi di sidebar, lalu klik **Cari Rekomendasi**.")
+    st.stop()
+
+recommendations = create_recommendation(
+    data=data,
+    similarity_matrix=similarity_matrix,
+    reference_place_id=reference_place_id,
+    selected_city=selected_city,
+    selected_category=selected_category,
+    keyword=keyword,
+    max_budget=max_budget,
+    min_rating=min_rating,
+    top_n=top_n,
+    use_location=use_location,
+    user_lat=user_lat,
+    user_long=user_long,
+    radius_km=radius_km,
+)
+
+st.divider()
+st.header("Hasil Rekomendasi Wisata")
+
+if recommendations.empty:
+    st.warning(
+        "Tidak ada destinasi yang memenuhi seluruh preferensi. "
+        "Coba naikkan budget, turunkan rating minimum, perluas radius, "
+        "atau pilih Semua Kota/Semua Kategori."
+    )
+    st.stop()
+
+scenario = recommendations["scenario"].iloc[0]
+st.success(f"Skenario rekomendasi: {scenario}")
+
+selected_summary = {
+    "Wisata referensi": "Tidak digunakan" if reference_choice == NO_REFERENCE else reference_choice,
+    "Kota": selected_city,
+    "Kategori": selected_category,
+    "Budget maksimal": format_rupiah(max_budget),
+    "Rating minimum": min_rating,
+    "Lokasi aktif": "Ya" if use_location else "Tidak",
+    "Radius": f"{radius_km} km" if use_location else "-",
+    "Jumlah rekomendasi": top_n,
+}
+
+with st.expander("Ringkasan input pengguna", expanded=True):
+    st.json(selected_summary)
+
+tab_list, tab_map, tab_table = st.tabs(["Daftar Rekomendasi", "Peta Rekomendasi", "Tabel Skor"])
+
+with tab_list:
+    for number, (_, row) in enumerate(recommendations.iterrows(), start=1):
+        show_recommendation_card(row, number, use_location)
+
+with tab_map:
+    recommendation_map = create_map(recommendations, use_location, user_lat, user_long)
+    if recommendation_map is not None:
+        st_folium(recommendation_map, height=520, width=1200, key="recommendation_result_map")
+
+with tab_table:
+    table_columns = [
+        "nama_wisata",
+        "kategori",
+        "kota",
+        "harga",
+        "rating",
+        "similarity_score",
+        "distance_score",
+        "rating_score",
+        "final_score",
+        "skor_rekomendasi",
+    ]
+
+    if use_location:
+        table_columns.insert(5, "distance_km")
+
+    st.dataframe(
+        recommendations[table_columns],
+        use_container_width=True,
+    )
+
+    csv_output = recommendations[table_columns].to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download hasil rekomendasi CSV",
+        data=csv_output,
+        file_name="hasil_rekomendasi_wisata.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )

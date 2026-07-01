@@ -17,8 +17,8 @@ from streamlit_folium import st_folium
 BASE_DIR = Path(__file__).resolve().parent
 
 DATA_PATH_CANDIDATES = [
-    BASE_DIR / "data" / "DATASET_WISATA_FINAL_NO_DUPLICATE_PATH_GAMBAR_COCOK.csv",
-    BASE_DIR / "DATASET_WISATA_FINAL_NO_DUPLICATE_PATH_GAMBAR_COCOK.csv",
+    BASE_DIR / "data" / "DATASET_WISATA_READY_MODELING_FINAL.csv",
+    BASE_DIR / "DATASET_WISATA_READY_MODELING_FINAL.csv",
 ]
 
 NO_REFERENCE = "Tanpa wisata referensi"

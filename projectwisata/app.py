@@ -3,8 +3,10 @@ Sistem Rekomendasi Destinasi Wisata Indonesia
 Content-Based Filtering · TF-IDF + Cosine Similarity
 """
 
+import difflib
 import html
 import math
+import re
 from pathlib import Path
 
 import folium
@@ -256,15 +258,87 @@ def short_desc(t: str, w: int = 45) -> str:
     return " ".join(ws[:w]) + ("…" if len(ws) > w else "")
 
 
+IMG_ROOT = BASE_DIR / "koleksi_gambar"
+
+
+@st.cache_data(show_spinner=False)
+def _list_img_folders() -> list:
+    """Nama folder gambar yang benar-benar ada di disk."""
+    if not IMG_ROOT.exists():
+        return []
+    return sorted(p.name for p in IMG_ROOT.iterdir() if p.is_dir())
+
+
+@st.cache_data(show_spinner=False)
+def _known_cities() -> list:
+    """Daftar nama kota, dipakai untuk membersihkan akhiran nama folder yang salah."""
+    for p in DATA_PATH_CANDIDATES:
+        if p.exists():
+            try:
+                kota = pd.read_csv(p, usecols=["kota"])["kota"].dropna().unique().tolist()
+                return sorted({str(k) for k in kota}, key=len, reverse=True)
+            except Exception:
+                return []
+    return []
+
+
+def _strip_city_suffix(folder: str) -> str:
+    """
+    Sebagian baris di CSV menulis nama folder dengan akhiran kota yang
+    dobel, misalnya "Taman Pelangi Yogyakarta Yogyakarta wisata" padahal
+    folder aslinya cuma "Taman Pelangi". Fungsi ini membuang akhiran itu.
+    """
+    cities = _known_cities()
+    if not cities:
+        return folder
+    pattern = "|".join(re.escape(c) for c in cities)
+    suffix_re = re.compile(rf"(\s(?:{pattern})){{1,2}}\s*wisata\s*$", re.IGNORECASE)
+    return suffix_re.sub("", folder).strip()
+
+
 def resolve_img(val: str) -> str:
     s = str(val).strip()
     if s.startswith(("http://", "https://")):
         return s
-    if s and s not in {"BELUM_DIISI", "BELUM DIISI", "nan", ""}:
-        for base in [BASE_DIR, BASE_DIR / "koleksi_gambar"]:
-            p = base / s
-            if p.exists():
-                return str(p)
+    if not s or s in {"BELUM_DIISI", "BELUM DIISI", "nan", ""}:
+        return PLACEHOLDER_IMG
+
+    # 1) Coba path apa adanya dulu.
+    for base in [BASE_DIR, IMG_ROOT]:
+        p = base / s
+        if p.exists():
+            return str(p)
+
+    # 2) Nama folder di CSV kadang tidak persis sama dengan nama folder di
+    #    disk (akhiran kota dobel, typo kecil, dsb), dan ekstensi file yang
+    #    tertulis di CSV kadang juga tidak sama dengan file yang benar-benar
+    #    ada (CSV bilang .webp, filenya ternyata .jpg). Coba cocokkan ulang.
+    m = re.match(r"koleksi_gambar[\\/](.+)[\\/](Image_\d+)\.\w+$", s)
+    if m:
+        folder_in_csv, fstem = m.groups()
+        stripped = _strip_city_suffix(folder_in_csv)
+
+        candidates = [stripped, folder_in_csv]
+        close = difflib.get_close_matches(stripped, _list_img_folders(), n=1, cutoff=0.55)
+        if close:
+            candidates.append(close[0])
+
+        for candidate in candidates:
+            folder_path = IMG_ROOT / candidate
+            if not folder_path.is_dir():
+                continue
+            # Cocokkan nama file (Image_1) tanpa peduli ekstensinya.
+            hits = sorted(folder_path.glob(f"{fstem}.*"))
+            if hits:
+                return str(hits[0])
+            # Fallback terakhir: ambil gambar pertama yang ada di folder itu.
+            any_img = sorted(
+                q for q in folder_path.iterdir()
+                if q.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+            )
+            if any_img:
+                return str(any_img[0])
+
     return PLACEHOLDER_IMG
 
 

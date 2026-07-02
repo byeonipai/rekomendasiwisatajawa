@@ -3,6 +3,7 @@ Sistem Rekomendasi Destinasi Wisata Indonesia
 Content-Based Filtering · TF-IDF + Cosine Similarity
 """
 
+import base64
 import difflib
 import html
 import math
@@ -296,6 +297,28 @@ def _strip_city_suffix(folder: str) -> str:
     return suffix_re.sub("", folder).strip()
 
 
+_MIME_MAP = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp", "gif": "gif"}
+
+
+@st.cache_data(show_spinner=False)
+def _to_data_uri(path_str: str) -> str:
+    """
+    resolve_img() dulu mengembalikan path file lokal apa adanya, lalu path
+    itu ditaruh langsung di atribut src pada tag <img> lewat st.markdown.
+    Itu tidak akan pernah tampil, karena browser tidak bisa membuka path
+    file di server sebagai URL gambar biasa. Jadi filenya harus dibaca dan
+    diubah jadi base64 data URI supaya browser bisa menampilkannya.
+    """
+    p = Path(path_str)
+    try:
+        data = p.read_bytes()
+    except OSError:
+        return PLACEHOLDER_IMG
+    mime = _MIME_MAP.get(p.suffix.lower().lstrip("."), "jpeg")
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:image/{mime};base64,{b64}"
+
+
 def resolve_img(val: str) -> str:
     s = str(val).strip()
     if s.startswith(("http://", "https://")):
@@ -307,7 +330,7 @@ def resolve_img(val: str) -> str:
     for base in [BASE_DIR, IMG_ROOT]:
         p = base / s
         if p.exists():
-            return str(p)
+            return _to_data_uri(str(p))
 
     # 2) Nama folder di CSV kadang tidak persis sama dengan nama folder di
     #    disk (akhiran kota dobel, typo kecil, dsb), dan ekstensi file yang
@@ -330,14 +353,14 @@ def resolve_img(val: str) -> str:
             # Cocokkan nama file (Image_1) tanpa peduli ekstensinya.
             hits = sorted(folder_path.glob(f"{fstem}.*"))
             if hits:
-                return str(hits[0])
+                return _to_data_uri(str(hits[0]))
             # Fallback terakhir: ambil gambar pertama yang ada di folder itu.
             any_img = sorted(
                 q for q in folder_path.iterdir()
                 if q.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
             )
             if any_img:
-                return str(any_img[0])
+                return _to_data_uri(str(any_img[0]))
 
     return PLACEHOLDER_IMG
 

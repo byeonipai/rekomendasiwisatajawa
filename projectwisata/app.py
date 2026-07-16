@@ -3,6 +3,7 @@ Sistem Rekomendasi Destinasi Wisata Indonesia
 Content-Based Filtering · TF-IDF + Cosine Similarity
 """
 
+import base64
 import difflib
 import html
 import math
@@ -296,6 +297,28 @@ def _strip_city_suffix(folder: str) -> str:
     return suffix_re.sub("", folder).strip()
 
 
+_MIME_MAP = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp", "gif": "gif"}
+
+
+@st.cache_data(show_spinner=False)
+def _to_data_uri(path_str: str) -> str:
+    """
+    resolve_img() dulu mengembalikan path file lokal apa adanya, lalu path
+    itu ditaruh langsung di atribut src pada tag <img> lewat st.markdown.
+    Itu tidak akan pernah tampil, karena browser tidak bisa membuka path
+    file di server sebagai URL gambar biasa. Jadi filenya harus dibaca dan
+    diubah jadi base64 data URI supaya browser bisa menampilkannya.
+    """
+    p = Path(path_str)
+    try:
+        data = p.read_bytes()
+    except OSError:
+        return PLACEHOLDER_IMG
+    mime = _MIME_MAP.get(p.suffix.lower().lstrip("."), "jpeg")
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:image/{mime};base64,{b64}"
+
+
 def resolve_img(val: str) -> str:
     s = str(val).strip()
     if s.startswith(("http://", "https://")):
@@ -307,7 +330,7 @@ def resolve_img(val: str) -> str:
     for base in [BASE_DIR, IMG_ROOT]:
         p = base / s
         if p.exists():
-            return str(p)
+            return _to_data_uri(str(p))
 
     # 2) Nama folder di CSV kadang tidak persis sama dengan nama folder di
     #    disk (akhiran kota dobel, typo kecil, dsb), dan ekstensi file yang
@@ -330,14 +353,14 @@ def resolve_img(val: str) -> str:
             # Cocokkan nama file (Image_1) tanpa peduli ekstensinya.
             hits = sorted(folder_path.glob(f"{fstem}.*"))
             if hits:
-                return str(hits[0])
+                return _to_data_uri(str(hits[0]))
             # Fallback terakhir: ambil gambar pertama yang ada di folder itu.
             any_img = sorted(
                 q for q in folder_path.iterdir()
                 if q.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
             )
             if any_img:
-                return str(any_img[0])
+                return _to_data_uri(str(any_img[0]))
 
     return PLACEHOLDER_IMG
 
@@ -473,21 +496,36 @@ def recommend(
 
     # Lokasi + Haversine
     has_loc = (
-        use_loc and user_lat is not None and user_lon is not None
-        and not math.isnan(float(user_lat)) and radius_km > 0
+        use_loc
+        and user_lat is not None
+        and user_lon is not None
+        and not math.isnan(float(user_lat))
+        and not math.isnan(float(user_lon))
+        and radius_km > 0
     )
+
     if has_loc:
         cand = cand.copy()
-        cand["jarak_km"] = haversine(
-            float(user_lat), float(user_lon),
-            cand["lat"].astype(float), cand["long"].astype(float)
+        cand["jarak_km"] = cand.apply(
+            lambda row: haversine(
+                float(user_lat),
+                float(user_lon),
+                float(row["lat"]),
+                float(row["long"]),
+            ),
+            axis=1,
         )
+
         cand = cand[cand["jarak_km"] <= radius_km]
         if cand.empty:
             return pd.DataFrame()
-        cand["dist_score"] = (1 - cand["jarak_km"] / radius_km).clip(0, 1)
+
+        cand["dist_score"] = (
+            1 - cand["jarak_km"] / radius_km
+        ).clip(0, 1)
     else:
-        cand["jarak_km"]   = np.nan
+        cand = cand.copy()
+        cand["jarak_km"] = np.nan
         cand["dist_score"] = 0.0
 
     # Weighted scoring (Bab 3)
@@ -538,7 +576,7 @@ def card_html(row, rank=None, show_score=True) -> str:
     </div>"""
 
 
-def render_grid(data_: pd.DataFrame, n_cols=3, show_score=True, show_rank=False):
+def render_grid(data_: pd.DataFrame, n_cols=3, show_score=True, show_rank=False, key_prefix="grid"):
     if data_.empty:
         st.markdown("""<div class='empty-box'>
             <div class='empty-icon'>🔍</div>
@@ -546,15 +584,22 @@ def render_grid(data_: pd.DataFrame, n_cols=3, show_score=True, show_rank=False)
         </div>""", unsafe_allow_html=True)
         return
     rows = [data_.iloc[i:i+n_cols] for i in range(0, len(data_), n_cols)]
+    # st.tabs() menjalankan isi SEMUA tab pada setiap run skrip (bukan cuma
+    # tab yang lagi aktif), jadi kalau render_grid dipanggil di beberapa
+    # tempat berbeda pada run yang sama (mis. grid "Populer" dan grid tiap
+    # kategori), place_id yang sama bisa muncul di lebih dari satu grid.
+    # key_prefix + posisi baris dipakai supaya key tombol tetap unik lintas
+    # semua pemanggilan render_grid pada satu halaman, bukan cuma unik di
+    # dalam satu grid saja.
     for rg in rows:
         cols = st.columns(n_cols)
-        for col, (_, rec) in zip(cols, rg.iterrows()):
+        for col, (pos, rec) in zip(cols, rg.iterrows()):
             with col:
                 rank_num = int(rec.name) + 1 if show_rank else None
                 st.markdown(card_html(rec, rank=rank_num, show_score=show_score),
                             unsafe_allow_html=True)
                 if st.button("Lihat Detail →",
-                             key=f"card_{rec['place_id']}_{rec.get('skor',0):.0f}",
+                             key=f"card_{key_prefix}_{pos}_{rec['place_id']}",
                              use_container_width=True):
                     st.session_state.detail_id = int(rec["place_id"])
                     st.session_state.view = "detail"
@@ -578,8 +623,6 @@ def render_detail(place_id: int):
     with c2:
         if st.button(f"🔗 Wisata Serupa dengan ini", key="serupa_det",
                      type="primary", use_container_width=True):
-            sim = recommend(ref_id=place_id, top_n=12, exclude_id=place_id
-                            if False else None)
             sim = recommend(ref_id=place_id, top_n=12)
             st.session_state.hasil_df = sim
             st.session_state.ref_label = r["nama_wisata"]
@@ -651,7 +694,7 @@ def render_detail(place_id: int):
     with tab_sim:
         sim5 = recommend(ref_id=place_id, top_n=5)
         sim5 = sim5[sim5["place_id"] != place_id] if not sim5.empty else sim5
-        render_grid(sim5, n_cols=5, show_score=True)
+        render_grid(sim5, n_cols=5, show_score=True, key_prefix=f"sim_{place_id}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -809,7 +852,7 @@ if st.session_state.view == "hasil" and st.session_state.hasil_df is not None:
     )
 
     with tab_kartu:
-        render_grid(hasil, n_cols=3, show_score=True, show_rank=True)
+        render_grid(hasil, n_cols=3, show_score=True, show_rank=True, key_prefix="hasil")
 
     with tab_peta:
         lat_c = hasil["lat"].mean(); lon_c = hasil["long"].mean()
@@ -998,7 +1041,7 @@ st.markdown("<div class='sec-h'>Destinasi Terpopuler</div>", unsafe_allow_html=T
 
 pop9 = df.sort_values("rating", ascending=False).head(9).copy()
 pop9["skor"] = 0.0
-render_grid(pop9, n_cols=3, show_score=False)
+render_grid(pop9, n_cols=3, show_score=False, key_prefix="pop")
 
 st.markdown("<div class='divider'/>", unsafe_allow_html=True)
 
@@ -1015,4 +1058,4 @@ for tab, kat in zip(st.tabs(TAB_L), KAT_K):
     with tab:
         sub_kat = df[df["kategori"] == kat].sort_values("rating", ascending=False).head(6).copy()
         sub_kat["skor"] = 0.0
-        render_grid(sub_kat, n_cols=3, show_score=False)
+        render_grid(sub_kat, n_cols=3, show_score=False, key_prefix=f"kat_{kat}")

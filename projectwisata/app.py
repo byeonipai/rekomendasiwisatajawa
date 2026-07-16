@@ -573,7 +573,7 @@ def card_html(row, rank=None, show_score=True) -> str:
     </div>"""
 
 
-def render_grid(data_: pd.DataFrame, n_cols=3, show_score=True, show_rank=False):
+def render_grid(data_: pd.DataFrame, n_cols=3, show_score=True, show_rank=False, key_prefix="grid"):
     if data_.empty:
         st.markdown("""<div class='empty-box'>
             <div class='empty-icon'>🔍</div>
@@ -588,9 +588,11 @@ def render_grid(data_: pd.DataFrame, n_cols=3, show_score=True, show_rank=False)
                 rank_num = int(rec.name) + 1 if show_rank else None
                 st.markdown(card_html(rec, rank=rank_num, show_score=show_score),
                             unsafe_allow_html=True)
-                if st.button("Lihat Detail →",
-                             key=f"card_{rec['place_id']}_{rec.get('skor',0):.0f}",
-                             use_container_width=True):
+                if st.button(
+                    "Lihat Detail →",
+                    key=f"{key_prefix}_card_{rec['place_id']}",
+                    use_container_width=True,
+                ):
                     st.session_state.detail_id = int(rec["place_id"])
                     st.session_state.view = "detail"
                     st.rerun()
@@ -684,7 +686,7 @@ def render_detail(place_id: int):
     with tab_sim:
         sim5 = recommend(ref_id=place_id, top_n=5)
         sim5 = sim5[sim5["place_id"] != place_id] if not sim5.empty else sim5
-        render_grid(sim5, n_cols=5, show_score=True)
+        render_grid(sim5, n_cols=5, show_score=True, key_prefix=f"detail_sim_{place_id}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -842,7 +844,7 @@ if st.session_state.view == "hasil" and st.session_state.hasil_df is not None:
     )
 
     with tab_kartu:
-        render_grid(hasil, n_cols=3, show_score=True, show_rank=True)
+        render_grid(hasil, n_cols=3, show_score=True, show_rank=True, key_prefix="hasil")
 
     with tab_peta:
         lat_c = hasil["lat"].mean(); lon_c = hasil["long"].mean()
@@ -1031,7 +1033,7 @@ st.markdown("<div class='sec-h'>Destinasi Terpopuler</div>", unsafe_allow_html=T
 
 pop9 = df.sort_values("rating", ascending=False).head(9).copy()
 pop9["skor"] = 0.0
-render_grid(pop9, n_cols=3, show_score=False)
+render_grid(pop9, n_cols=3, show_score=False, key_prefix="populer")
 
 st.markdown("<div class='divider'/>", unsafe_allow_html=True)
 
@@ -1048,4 +1050,4 @@ for tab, kat in zip(st.tabs(TAB_L), KAT_K):
     with tab:
         sub_kat = df[df["kategori"] == kat].sort_values("rating", ascending=False).head(6).copy()
         sub_kat["skor"] = 0.0
-        render_grid(sub_kat, n_cols=3, show_score=False)
+        render_grid(sub_kat, n_cols=3, show_score=False, key_prefix=f"kategori_{kat}")
